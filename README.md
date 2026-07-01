@@ -162,41 +162,6 @@ By bitrate:
   1-2 Mbps      2
 ```
 
-The total count appears only in the `Statistics for N video(s)` header
-line; the tables themselves have no total row or column.
-
-The discrete-key tables (extension, resolution, video/audio codec) are
-sorted by count descending, then key ascending. The duration and bitrate
-tables are ordered by **magnitude (size) ascending** — short→long and
-low→high — so a reader scans them top-to-bottom in order; empty buckets are
-omitted.
-
-Duration and bitrate both use power-of-two boundaries, each step
-doubling: duration in minutes (`<1`, `1-2`, `2-4`, ... `1024+`) and bitrate
-in Mbps (`<1`, `1-2`, `2-4`, ... `1024+`). Empty buckets are omitted, so the
-tables only show the magnitudes that actually occur (a real library rarely
-climbs past the low hundreds of Mbps). Bitrate uses the same resolution as
-the sheet header — container `format.bit_rate`, falling back to the video
-stream's `bit_rate`, in decimal Mbps; videos reporting no bitrate count
-under a trailing `(unknown)` bucket.
-
-The report covers skipped (already-sheeted) videos too — each such video is
-ffprobed exactly once during the run, and that same single result is reused
-for both the sheet header and the stats, so no video is ever probed twice
-(see [Probe caching](#probe-caching)).
-
-Sentinels: a video with no audio stream groups under `(none)`; any value
-ffprobe could not report (unknown codec, zero resolution, no bitrate)
-groups under `(unknown)`.
-
-### Probe caching
-
-Every video — whether freshly sheeted or skipped because its sheet already
-exists — is ffprobed at most once per run. The result is cached and shared
-between sheet generation (the header metadata) and the end-of-run
-statistics, so adding the statistics report did not introduce any extra
-ffprobe calls.
-
 ### Orphan cleanup
 
 On by default, scoped to the screens tree only. After generation, any sheet
