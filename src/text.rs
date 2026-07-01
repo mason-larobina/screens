@@ -31,8 +31,7 @@ impl TextRenderer {
     }
 
     /// Render a single logical line of text as one visual row, drawing onto
-    /// `img` at `(x, y)` (baseline at `y + ascent`). Returns the pixel advance
-    /// width consumed.
+    /// `img` at `(x, y)` (baseline at `y + ascent`).
     ///
     /// Uses `imageproc::drawing::draw_text_mut`, which blends the text color
     /// over the existing canvas pixel by glyph coverage. The header strip is
@@ -46,7 +45,7 @@ impl TextRenderer {
         y: u32,
         font_size: f32,
         color: Rgb<u8>,
-    ) -> u32 {
+    ) {
         draw_text_mut(
             img,
             color,
@@ -56,19 +55,6 @@ impl TextRenderer {
             &self.font,
             text,
         );
-        self.measure_width(text, font_size)
-    }
-
-    /// Measure the pixel advance width of a string at the given font size,
-    /// without drawing.
-    pub fn measure_width(&self, text: &str, font_size: f32) -> u32 {
-        let scale = PxScale::from(font_size);
-        let scaled = self.font.as_scaled(scale);
-        let mut w = 0.0f32;
-        for ch in text.chars() {
-            w += scaled.h_advance(scaled.glyph_id(ch));
-        }
-        w.round() as u32
     }
 
     /// Word-wrap a single logical line to fit `max_w` pixels, returning the
@@ -76,15 +62,15 @@ impl TextRenderer {
     ///
     /// The font is monospaced (the default, Noto Sans Mono, is), so one column
     /// equals the advance width of one glyph. We convert `max_w` to a column
-    /// of one glyph. We convert `max_w` to a column count and delegate to
-    /// `textwrap`, with `break_words(true)` so a single word longer than the
-    /// available width is hard-broken across it (the rare case the prior
-    /// char-by-char fallback handled).
+    /// count and delegate to `textwrap`, with `break_words(true)` so a single
+    /// word longer than the available width is hard-broken across it (the rare
+    /// case the prior char-by-char fallback handled).
     ///
     /// Whitespace between words is pre-normalized to single spaces to match
     /// the prior `split_whitespace` collapse behavior.
     pub fn wrap_line(&self, line: &str, font_size: f32, max_w: u32) -> Vec<String> {
-        let char_w = self.measure_width("M", font_size).max(1);
+        let scaled = self.font.as_scaled(PxScale::from(font_size));
+        let char_w = scaled.h_advance(scaled.glyph_id('M')).round().max(1.0) as u32;
         let cols = ((max_w / char_w) as usize).max(1);
         let normalized: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
         textwrap::wrap(&normalized, textwrap::Options::new(cols).break_words(true))
