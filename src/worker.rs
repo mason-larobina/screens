@@ -148,12 +148,15 @@ fn process_one(
     // `thumb_w/thumb_h == src_w/src_h`. This bounds both dimensions so a
     // portrait clip's sheet cannot out-size a landscape clip's.
     let (thumb_w, thumb_h) = thumb_dims(meta.video.width, meta.video.height, layout.thumb_mp);
+    let src_area = meta.video.width as f64 * meta.video.height as f64;
+    let capped = src_area <= layout.thumb_mp * 1_000_000.0;
     log::debug!(
-        "{}: src {}x{} -> thumb {thumb_w}x{thumb_h} ({:.3} MP target)",
+        "{}: src {}x{} -> thumb {thumb_w}x{thumb_h} ({:.3} MP target{})",
         src.display(),
         meta.video.width,
         meta.video.height,
-        layout.thumb_mp
+        layout.thumb_mp,
+        if capped { "; source below MP target, matched frame size" } else { "" }
     );
 
     log::debug!("{}: sheet dest = {}", src.display(), dest.display());

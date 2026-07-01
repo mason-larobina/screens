@@ -134,12 +134,25 @@ pub fn offsets(duration: f64, n: usize) -> Vec<f64> {
 /// portrait clip no longer out-sizes a wide landscape clip — every video's
 /// thumbnails occupy the same pixel area.
 ///
+/// When the source frame is already *smaller* than the megapixel target
+/// (`src_w * src_h <= target_mp * 1_000_000`), the thumbnails match the
+/// source frame size (even-rounded) rather than being upscaled. Upscaling a
+/// sub-MP source would only waste pixels and blur the image without adding
+/// any real detail, so the area budget is treated as a ceiling, not a floor.
+///
 /// Dimensions are rounded down to even values (encoders dislike odd
 /// heights), with a floor of 2.
 pub fn thumb_dims(src_w: u32, src_h: u32, target_mp: f64) -> (u32, u32) {
     let src_w = src_w.max(1) as f64;
     let src_h = src_h.max(1) as f64;
     let area = target_mp.max(0.0) * 1_000_000.0;
+    // Source already at or below the megapixel budget: don't upscale — match
+    // the frame size exactly (after even-rounding).
+    if src_w * src_h <= area {
+        let w = (src_w.round() as u32) & !1;
+        let h = (src_h.round() as u32) & !1;
+        return (w.max(2), h.max(2));
+    }
     // w/h = src_w/src_h  and  w*h = area  =>
     // w = sqrt(area * src_w/src_h), h = sqrt(area * src_h/src_w)
     let w = (area * src_w / src_h).sqrt();
@@ -191,7 +204,7 @@ pub fn extract_frame(
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_count, squarify};
+    use super::{frame_count, squarify, thumb_dims};
 
     fn grid_aspect(cols: u32, rows: u32, aspect: f64) -> f64 {
         (cols as f64 / rows as f64) * aspect
@@ -203,6 +216,48 @@ mod tests {
         assert!((frame_count(3600.0) - 16.0).abs() < 1e-9, "1h -> 16");
         assert!(frame_count(0.0) >= 2.0, "floor >= 2");
         assert!(frame_count(-5.0) >= 2.0, "floor >= 2 on negative");
+    }
+
+    #[test]
+    fn thumb_dims_targets_area() {
+        // 1920x1080 ≈ 2.07 MP. Targeting 1 MP scales down ~sqrt(1/2.07) on
+        // each axis while keeping the 16:9 aspect and even dims.
+        let (w, h) = thumb_dims(1920, 1080, 1.0);
+        assert_eq!(w % 2, 0, "width even");
+        assert_eq!(h % 2, 0, "height even");
+        let area = (w as f64) * (h as f64);
+        assert!((area - 1_000_000.0).abs() / 1_000_000.0 < 0.02, "~1 MP");
+        // aspect preserved (within even-rounding).
+        assert!((w as f64 / h as f64 - 16.0 / 9.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn thumb_dims_does_not_upscale_small_source() {
+        // A 320x180 source is 0.0576 MP — far below any sane MP target.
+        // With a 1 MP target the old code upscaled to ~1333x750; the fix
+        // must return the source frame size (even-rounded) instead.
+        let (w, h) = thumb_dims(320, 180, 1.0);
+        assert_eq!((w, h), (320, 180), "sub-MP source matches frame size");
+
+        // Odd source dims are even-rounded, never upscaled.
+        let (w, h) = thumb_dims(321, 181, 1.0);
+        assert_eq!((w, h), (320, 180), "odd sub-MP source even-rounded down");
+    }
+
+    #[test]
+    fn thumb_dims_boundary_is_source_size() {
+        // Source area exactly equals the target area (no upscale, no
+        // downscale): result must be the source frame size. 1000x1000 = 1 MP
+        // against a 1 MP target is the exact boundary; `<=` keeps it at source.
+        let (w, h) = thumb_dims(1000, 1000, 1.0);
+        assert_eq!((w, h), (1000, 1000));
+
+        // Just over the boundary (1.01 MP source vs 1 MP target): now it
+        // scales down, so the result is strictly smaller than the source
+        // on at least one axis and never larger.
+        let (w, h) = thumb_dims(1010, 1000, 1.0);
+        assert!(w <= 1010 && h <= 1000);
+        assert!((w as f64) * (h as f64) < 1010.0 * 1000.0);
     }
 
     #[test]
