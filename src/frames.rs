@@ -6,8 +6,8 @@ use std::process::Command;
 
 /// Target number of frames to sample, driven solely by duration in seconds.
 ///
-/// Two anchors in log2 space: 60s → 4, 3600s → 16, i.e. slope
-/// `12 / log2(60) == 2.031...`. This is an *advisory* real-valued target;
+/// Two anchors in log2 space: 10s → 2, 3600s → 16, i.e. slope
+/// `14 / log2(360) == 1.648...`. This is an *advisory* real-valued target;
 /// the actual grid cell count is produced by [`squarify`], which rounds it
 /// to a full grid (cols×rows) that keeps the photo grid as square as
 /// possible. No multiple-of-4 rounding or min-4 clamp is applied here —
@@ -18,8 +18,8 @@ pub fn frame_count(seconds: f64) -> f64 {
     if seconds <= 0.0 {
         return 2.0;
     }
-    let slope = 12.0 / 60.0f64.log2();
-    let raw = 4.0 + slope * (seconds / 60.0).log2();
+    let slope = 14.0 / 360.0f64.log2();
+    let raw = 2.0 + slope * (seconds / 10.0).log2();
     raw.max(2.0)
 }
 
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn frame_count_anchors() {
-        assert!((frame_count(60.0) - 4.0).abs() < 1e-9, "60s -> 4");
+        assert!((frame_count(10.0) - 2.0).abs() < 1e-9, "10s -> 2");
         assert!((frame_count(3600.0) - 16.0).abs() < 1e-9, "1h -> 16");
         assert!(frame_count(0.0) >= 2.0, "floor >= 2");
         assert!(frame_count(-5.0) >= 2.0, "floor >= 2 on negative");
