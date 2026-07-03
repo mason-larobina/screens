@@ -1,11 +1,6 @@
 # `screens` — Video Screenlist Sheet Generator
 
-`screens` scans a directory tree of video files and produces, for each video,
-a single JPEG "screenlist" (contact sheet) image: several sampled frames
-arranged in a grid, topped with a multi-line text header. Black canvas, white
-text. The input directory structure is mirrored into a `Screens/` sibling
-subtree, and orphaned sheets left over from deleted sources can be removed
-automatically.
+`screens` scans a directory tree of video files and produces, for each video, a single JPEG "screenlist" (contact sheet) image: several sampled frames arranged in a grid, topped with a multi-line text header. Black canvas, white text. The input directory structure is mirrored into a `Screens/` sibling subtree, and orphaned sheets left over from deleted sources can be removed automatically.
 
 For every video:
 
@@ -15,42 +10,25 @@ ROOT/a/b/video.mkv   ->   ROOT/Screens/a/b/video.mkv.jpg
 
 ## What it does
 
-- **One JPEG per input video**, sampled across the duration (skipping the
-  start/end, which are typically black frames).
-- **Frame count is duration-driven** — longer videos get more thumbnails,
-  laid out in a grid shaped per video to stay roughly square.
-- **Thumbnails are aspect-preserving** and target a fixed megapixel (pixel
-  area) budget, so a portrait clip's sheet can't out-size a landscape clip's.
-- **4-line header** on every sheet: filename, size + duration, video
-  codec/resolution/bitrate/fps, and audio codec/channels/sample rate. The
-  audio line is always rendered (`Audio: —` when there is no audio stream).
-- **Mirrors the input tree** under `<ROOT>/<screens-dir>/`, preserving the
-  full source filename (extension included) plus `.jpg` so sheets trace back
-  to their exact source and never collide across formats.
-- **Orphan cleanup** removes sheets whose source video no longer exists,
-  scoped strictly to the screens tree (source files are never touched).
-- **Skips already-generated sheets** by default — re-runs only sheet new or
-  umped sources; pass `--force` to regenerate everything. See
-  [Skip existing sheets](#skip-existing-sheets).
-- **Fail-fast on corrupt input**: a single irrecoverable error aborts the
-  run so you notice and can fix/re-run.
-- **End-of-run statistics**: prints a plain-text report on stdout, grouping and counting every video under root by extension,
-  resolution, video codec, audio codec, duration, and bitrate.
+- **One JPEG per input video**, sampled across the duration (skipping the start/end, which are typically black frames).
+- **Frame count is duration-driven** — longer videos get more thumbnails, laid out in a grid shaped per video to stay roughly square.
+- **Thumbnails are aspect-preserving** and target a fixed megapixel (pixel area) budget, so a portrait clip's sheet can't out-size a landscape clip's.
+- **4-line header** on every sheet: filename, size + duration, video codec/resolution/bitrate/fps, and audio codec/channels/sample rate. The audio line is always rendered (`Audio: —` when there is no audio stream).
+- **Mirrors the input tree** under `<ROOT>/<screens-dir>/`, preserving the full source filename (extension included) plus `.jpg` so sheets trace back to their exact source and never collide across formats.
+- **Orphan cleanup** removes sheets whose source video no longer exists, scoped strictly to the screens tree (source files are never touched).
+- **Skips already-generated sheets** by default — re-runs only sheet new or umped sources; pass `--force` to regenerate everything. See [Skip existing sheets](#skip-existing-sheets).
+- **Fail-fast on corrupt input**: a single irrecoverable error aborts the run so you notice and can fix/re-run.
+- **End-of-run statistics**: prints a plain-text report on stdout, grouping and counting every video under root by extension, resolution, video codec, audio codec, duration, and bitrate.
 
 ## Who it's for
 
-Anyone with a library of video files who wants quick visual previews
-(contact sheets) of their contents — for browsing, cataloguing, or verifying
-that files are intact.
+Anyone with a library of video files who wants quick visual previews (contact sheets) of their contents — for browsing, cataloguing, or verifying that files are intact.
 
 ## Requirements
 
 - **`ffmpeg`** and **`ffprobe`** on `PATH`.
-- A **system-installed monospace font** for the header. The default is
-  `Noto Sans Mono` (e.g. the `fonts-noto-mono` / `google-noto-sans-mono-fonts`
-  package, depending on distro).
-- **`fc-match`** (fontconfig) on `PATH`, only required when `--font` is a
-  font family name rather than a direct file path.
+- A **system-installed monospace font** for the header. The default is `Noto Sans Mono` (e.g. the `fonts-noto-mono` / `google-noto-sans-mono-fonts` package, depending on distro).
+- **`fc-match`** (fontconfig) on `PATH`, only required when `--font` is a font family name rather than a direct file path.
 - A Rust toolchain (to build from source).
 
 ## Install
@@ -88,10 +66,7 @@ Options:
   -V, --version                    Print version
 ```
 
-`<ROOT>` is the input directory tree to scan. Sheets are written under
-`<ROOT>/<screens-dir>/...`, mirroring the source file and subdirectory
-structure, and orphaned sheets from previous runs are removed (see
-[Orphan cleanup](#orphan-cleanup)).
+`<ROOT>` is the input directory tree to scan. Sheets are written under `<ROOT>/<screens-dir>/...`, mirroring the source file and subdirectory structure, and orphaned sheets from previous runs are removed (see [Orphan cleanup](#orphan-cleanup)).
 
 Example:
 
@@ -101,11 +76,7 @@ screens ~/Videos
 
 ### Skip existing sheets
 
-By default a video whose sheet already exists on disk is **skipped** —
-probed for nothing, regenerated not at all — so re-running `screens` over a
-tree only does work for new (or never-sheeted) sources. Skipped videos are
-counted and reported on a final `skipped N video(s) with existing sheet(s)`
-line; per-video skips also log the source and the existing sheet path.
+By default a video whose sheet already exists on disk is **skipped** — probed for nothing, regenerated not at all — so re-running `screens` over a tree only does work for new (or never-sheeted) sources. Skipped videos are counted and reported on a final `skipped N video(s) with existing sheet(s)` line; per-video skips also log the source and the existing sheet path.
 
 Pass `--force` to overwrite existing sheets unconditionally:
 
@@ -113,15 +84,11 @@ Pass `--force` to overwrite existing sheets unconditionally:
 screens --force ~/Videos
 ```
 
-Skip checks the mirrored sheet path (`<ROOT>/<screens-dir>/.../<file>.jpg`)
-for existence only — it does not compare timestamps or contents, so a
-changed source is not detected. To refresh a single video's sheet, delete
-its sheet (or run with `--force`) and re-run.
+Skip checks the mirrored sheet path (`<ROOT>/<screens-dir>/.../<file>.jpg`) for existence only — it does not compare timestamps or contents, so a changed source is not detected. To refresh a single video's sheet, delete its sheet (or run with `--force`) and re-run.
 
 ### Statistics
 
-At the end of a run, `screens` prints a plain-text report on stdout, grouping and counting **every video under root** by extension,
-resolution, video codec, and audio codec.
+At the end of a run, `screens` prints a plain-text report on stdout, grouping and counting **every video under root** by extension, resolution, video codec, and audio codec.
 
 ```
 Statistics for 4 video(s)
@@ -164,24 +131,15 @@ By bitrate:
 
 ### Orphan cleanup
 
-On by default, scoped to the screens tree only. After generation, any sheet
-whose source video no longer exists is reported and deleted (along with any
-now-empty subdirectories it leaves behind). Pass `--no-orphan-cleanup` to
-report without deleting. Source files are never touched.
+On by default, scoped to the screens tree only. After generation, any sheet whose source video no longer exists is reported and deleted (along with any now-empty subdirectories it leaves behind). Pass `--no-orphan-cleanup` to report without deleting. Source files are never touched.
 
 ### Logging
 
-`RUST_LOG` controls verbosity (defaults to `info`, so progress is visible
-without extra flags). Use `RUST_LOG=debug` for per-video detail or
-`RUST_LOG=warn` for a quieter run.
+`RUST_LOG` controls verbosity (defaults to `info`, so progress is visible without extra flags). Use `RUST_LOG=debug` for per-video detail or `RUST_LOG=warn` for a quieter run.
 
 ## Exit codes
 
-| Exit | When |
-|------|------|
-| `0` | Every video produced a sheet and the orphan sweep completed cleanly. |
-| `1` | A failure during the run — a corrupt video (ffprobe fails, a frame extraction fails, an image write fails) or an orphan-cleanup error. Printed as `error: <path>: <reason>`; remaining queued videos are not processed. |
-| `2` | A hard pre-work error: missing/invalid `<ROOT>`, `<ROOT>` not a directory, `ffmpeg`/`ffprobe` not on `PATH`, invalid flag values, or an unresolvable font. |
+| Exit | When | |------|------| | `0` | Every video produced a sheet and the orphan sweep completed cleanly. | | `1` | A failure during the run — a corrupt video (ffprobe fails, a frame extraction fails, an image write fails) or an orphan-cleanup error. Printed as `error: <path>: <reason>`; remaining queued videos are not processed. | | `2` | A hard pre-work error: missing/invalid `<ROOT>`, `<ROOT>` not a directory, `ffmpeg`/`ffprobe` not on `PATH`, invalid flag values, or an unresolvable font. |
 
 ## Project layout
 

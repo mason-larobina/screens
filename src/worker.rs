@@ -156,7 +156,11 @@ fn process_one(
         meta.video.width,
         meta.video.height,
         layout.thumb_mp,
-        if capped { "; source below MP target, matched frame size" } else { "" }
+        if capped {
+            "; source below MP target, matched frame size"
+        } else {
+            ""
+        }
     );
 
     log::debug!("{}: sheet dest = {}", src.display(), dest.display());
