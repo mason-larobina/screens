@@ -33,7 +33,13 @@ Anyone with a library of video files who wants quick visual previews (contact sh
 
 ## Install
 
-Install from source:
+Install the latest published version from crates.io:
+
+```
+cargo install screens
+```
+
+Or build and install from a local checkout:
 
 ```
 cargo install --path=.
