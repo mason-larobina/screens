@@ -139,7 +139,9 @@ On by default, scoped to the screens tree only. After generation, any sheet whos
 
 ## Exit codes
 
-| Exit | When | |------|------| | `0` | Every video produced a sheet and the orphan sweep completed cleanly. | | `1` | A failure during the run — a corrupt video (ffprobe fails, a frame extraction fails, an image write fails) or an orphan-cleanup error. Printed as `error: <path>: <reason>`; remaining queued videos are not processed. | | `2` | A hard pre-work error: missing/invalid `<ROOT>`, `<ROOT>` not a directory, `ffmpeg`/`ffprobe` not on `PATH`, invalid flag values, or an unresolvable font. |
+- `0` — Every video produced a sheet and the orphan sweep completed cleanly.
+- `1` — A failure during the run — a corrupt video (ffprobe fails, a frame extraction fails, an image write fails) or an orphan-cleanup error. Printed as `error: <path>: <reason>`; remaining queued videos are not processed.
+- `2` — A hard pre-work error: missing/invalid `<ROOT>`, `<ROOT>` not a directory, `ffmpeg`/`ffprobe` not on `PATH`, invalid flag values, or an unresolvable font.
 
 ## Project layout
 
