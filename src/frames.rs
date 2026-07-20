@@ -162,17 +162,16 @@ pub fn thumb_dims(src_w: u32, src_h: u32, target_mp: f64) -> (u32, u32) {
     (w.max(2), h.max(2))
 }
 
-/// Extract a single frame at `offset` seconds, scaled to the target
-/// `thumb_w`×`thumb_h` (both even, aspect-preserving). Caller owns the temp
-/// file and must remove it.
-pub fn extract_frame(
-    input: &Path,
-    offset: f64,
-    thumb_w: u32,
-    thumb_h: u32,
-    jpeg_q: u32,
-    dest_png: &Path,
-) -> Result<()> {
+/// Extract a single frame at `offset` seconds at the source's **native**
+/// (full) resolution — no `-vf scale=` filter — and write it as a PNG.
+///
+/// This is the single ffmpeg pass per sampled frame: the caller decodes the
+/// PNG and resizes it down to the sheet's thumbnail size in-process (via the
+/// `image` crate), so the sheet and any kept frames share one extraction.
+/// When `--frames` is set the written PNG is kept on disk (under the Frames
+/// tree); otherwise the caller writes it to a temp dir and removes it after
+/// decoding. The caller owns the output file and the directory it lives in.
+pub fn extract_native_frame(input: &Path, offset: f64, dest_png: &Path) -> Result<()> {
     let status = Command::new("ffmpeg")
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -183,10 +182,6 @@ pub fn extract_frame(
         .arg(input)
         .arg("-frames:v")
         .arg("1")
-        .arg("-vf")
-        .arg(format!("scale={thumb_w}:{thumb_h}"))
-        .arg("-q:v")
-        .arg(jpeg_q.to_string())
         .arg("-y")
         .arg(dest_png)
         .status()
@@ -194,7 +189,7 @@ pub fn extract_frame(
 
     if !status.success() {
         return Err(anyhow!(
-            "ffmpeg frame extraction failed at offset {:.3}s (exit {:?})",
+            "ffmpeg native frame extraction failed at offset {:.3}s (exit {:?})",
             offset,
             status.code()
         ));

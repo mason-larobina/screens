@@ -101,6 +101,32 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     force: bool,
 
+    /// Save every sampled frame at native (full source) resolution into a
+    /// `<ROOT>/<frames-dir>/` sibling tree, as JPEG files named
+    /// `<complete-filename>.<frame_n>.jpg` (1-based, zero-padded to 4 digits:
+    /// `0001`, `0002`, ...) sitting beside the source's relative path. Off by
+    /// default. The sheet is built from these same native frames — extracted
+    /// once via ffmpeg, then resized to thumbnail size in-process — so
+    /// `--frames` adds no extra ffmpeg work: it just re-encodes the already-
+    /// decoded native image as a JPEG on disk instead of discarding it.
+    /// Sheet output is identical whether or not this flag is set. Like the
+    /// screens tree, orphan frame files whose source video no longer exists
+    /// (and any extra non-frame `.jpg` images in the tree) are removed
+    /// (subject to `--no-orphan-cleanup`), and a video's prior frame files
+    /// are cleared before regeneration so stale frames from a prior run (e.g.
+    /// a different frame count) are removed.
+    #[arg(long, default_value_t = false)]
+    frames: bool,
+
+    /// Name of the neighbouring frame-output subtree, created directly under
+    /// ROOT when `--frames` is set. Must be a single path component and
+    /// must differ from `--screens-dir`. Like `--screens-dir`, this name is
+    /// reserved under ROOT (such a directory is pruned from the source scan)
+    /// so a pre-existing `<frames-dir>` of generated frames is never
+    /// mistaken for source content.
+    #[arg(long, default_value = "Frames")]
+    frames_dir: String,
+
     /// Video extensions (case-insensitive, no leading dot) eligible for
     /// sheet generation. Comma-separated. Files whose extension is **not** in
     /// this set are skipped and reported (grouped by extension) so a missed
@@ -149,6 +175,16 @@ fn try_main() -> Result<ExitCode, RunError> {
             "--screens-dir must be a single path component".into(),
         ));
     }
+    if cli.frames_dir.is_empty() || cli.frames_dir.contains('/') || cli.frames_dir.contains('\\') {
+        return Err(RunError::Hard(
+            "--frames-dir must be a single path component".into(),
+        ));
+    }
+    if cli.frames_dir == cli.screens_dir {
+        return Err(RunError::Hard(
+            "--frames-dir must differ from --screens-dir".into(),
+        ));
+    }
 
     let video_exts = paths::VideoExts::from_cli(&cli.video_exts).map_err(RunError::Hard)?;
 
@@ -190,7 +226,7 @@ fn try_main() -> Result<ExitCode, RunError> {
 
     // Collect videos.
     log::info!("scanning for videos...");
-    let videos = paths::collect_videos(&root, &cli.screens_dir, &video_exts);
+    let videos = paths::collect_videos(&root, &cli.screens_dir, &cli.frames_dir, &video_exts);
     let video_count = videos.len();
     log::info!("found {} video(s)", video_count);
     log::debug!("videos: {videos:#?}");
@@ -202,24 +238,41 @@ fn try_main() -> Result<ExitCode, RunError> {
         &videos,
         &root,
         &cli.screens_dir,
+        &cli.frames_dir,
         &layout,
         jobs,
         &renderer,
         &cache,
         cli.force,
+        cli.frames,
     )
     .map_err(|e| RunError::Runtime(e.to_string()))?;
 
     // Orphan sweep (scoped to the screens tree).
-    log::info!("scanning for orphans...");
+    log::info!("scanning for orphan sheets...");
     let orphans = paths::find_orphans(&root, &cli.screens_dir)
         .map_err(|e| RunError::Runtime(e.to_string()))?;
-    log::info!("found {} orphan(s)", orphans.len());
+    log::info!("found {} orphan sheet(s)", orphans.len());
     log::debug!("orphans: {orphans:#?}");
+
+    // Orphan sweep (scoped to the frames tree). Runs regardless of `--frames`
+    // so stale frame files left by a prior `--frames` run are cleaned even on
+    // a run that does not keep frames this time. Gated by `--no-orphan-cleanup`
+    // like the screens sweep.
+    log::info!("scanning for orphan frame files...");
+    let frame_orphans = paths::find_frame_orphans(&root, &cli.frames_dir)
+        .map_err(|e| RunError::Runtime(e.to_string()))?;
+    log::info!("found {} orphan frame file(s)", frame_orphans.len());
+    log::debug!("frame orphans: {frame_orphans:#?}");
+
     if !cli.no_orphan_cleanup {
         let orphans_removed = paths::cleanup_orphans(&orphans, &root, &cli.screens_dir)
             .map_err(|e| RunError::Runtime(e.to_string()))?;
-        log::info!("orphans removed count = {orphans_removed}");
+        log::info!("orphan sheets removed count = {orphans_removed}");
+        let frame_orphans_removed =
+            paths::cleanup_frame_orphans(&frame_orphans, &root, &cli.frames_dir)
+                .map_err(|e| RunError::Runtime(e.to_string()))?;
+        log::info!("orphan frame files removed count = {frame_orphans_removed}");
     };
 
     log::info!("done: processed {processed}");
@@ -229,11 +282,24 @@ fn try_main() -> Result<ExitCode, RunError> {
     // plain-text block on stdout. Reuses the per-video probe results cached during the run
     // (every video — skipped or not — was probed exactly once), so this adds
     // no ffprobe calls.
-    print_stats(&root, &cli.screens_dir, &video_exts, video_count, &cache);
+    print_stats(
+        &root,
+        &cli.screens_dir,
+        &cli.frames_dir,
+        &video_exts,
+        video_count,
+        &cache,
+    );
 
     // Report skipped (non-video) files last, so the warning appears at the
     // end of the log output — after all sheet/orphan work is complete.
-    warn_skipped_files(&root, &cli.screens_dir, &video_exts, video_count);
+    warn_skipped_files(
+        &root,
+        &cli.screens_dir,
+        &cli.frames_dir,
+        &video_exts,
+        video_count,
+    );
 
     Ok(ExitCode::SUCCESS)
 }
@@ -321,10 +387,11 @@ fn resolve_font_path(spec: &str) -> Result<PathBuf, RunError> {
 fn warn_skipped_files(
     root: &std::path::Path,
     screens_dir: &str,
+    frames_dir: &str,
     video_exts: &paths::VideoExts,
     video_count: usize,
 ) {
-    let skipped = paths::non_video_by_ext(root, screens_dir, video_exts);
+    let skipped = paths::non_video_by_ext(root, screens_dir, frames_dir, video_exts);
     if skipped.by_ext.is_empty() {
         return;
     }
@@ -370,6 +437,7 @@ fn warn_skipped_files(
 fn print_stats(
     root: &std::path::Path,
     screens_dir: &str,
+    frames_dir: &str,
     video_exts: &paths::VideoExts,
     video_count: usize,
     cache: &probe::ProbeCache,
@@ -380,7 +448,7 @@ fn print_stats(
     // Re-collect the (sorted) video list so the report order is deterministic
     // and independent of worker completion order. The probe results are read
     // from the cache populated during the run.
-    let videos = paths::collect_videos(root, screens_dir, video_exts);
+    let videos = paths::collect_videos(root, screens_dir, frames_dir, video_exts);
     let stats = stats::Stats::from_cache(&videos, cache);
     println!("{}", stats.render());
 }

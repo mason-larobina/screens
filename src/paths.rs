@@ -61,15 +61,24 @@ impl VideoExts {
 }
 
 /// Recursively collect video files under `root`, sorted for deterministic
-/// output. Any directory whose name equals `screens_dir` is pruned (we never
-/// recurse into a previously-generated output tree). `exts` is the
-/// lowercased set of eligible extensions (from `--video-exts`).
-pub fn collect_videos(root: &Path, screens_dir: &str, exts: &VideoExts) -> Vec<PathBuf> {
+/// output. Any directory whose name equals `screens_dir` **or** `frames_dir`
+/// is pruned (we never recurse into a previously-generated output tree —
+/// sheets or kept frames). `exts` is the lowercased set of eligible
+/// extensions (from `--video-exts`).
+pub fn collect_videos(
+    root: &Path,
+    screens_dir: &str,
+    frames_dir: &str,
+    exts: &VideoExts,
+) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for entry in WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| {
-            if e.file_type().is_dir() && e.file_name() == std::ffi::OsStr::new(screens_dir) {
+            if e.file_type().is_dir()
+                && (e.file_name() == std::ffi::OsStr::new(screens_dir)
+                    || e.file_name() == std::ffi::OsStr::new(frames_dir))
+            {
                 return false;
             }
             true
@@ -103,26 +112,35 @@ pub struct Skipped {
     pub no_ext_paths: Vec<PathBuf>,
 }
 
-/// Walk `root` (pruning any directory named `screens_dir`, matching
-/// [`collect_videos`]) and group every **non-video** file by lowercased
-/// extension. Files with no extension are counted under the empty string `""`
-/// and their relative paths are also collected into
-/// [`Skipped::no_ext_paths`]. The Screens tree itself is never scanned, so
-/// generated sheets are never counted here. `exts` is the lowercased set of
-/// eligible extensions (from `--video-exts`); a file whose extension is *not*
-/// in `exts` is counted here.
+/// Walk `root` (pruning any directory named `screens_dir` **or**
+/// `frames_dir`, matching [`collect_videos`]) and group every **non-video**
+/// file by lowercased extension. Files with no extension are counted under
+/// the empty string `""` and their relative paths are also collected into
+/// [`Skipped::no_ext_paths`]. The Screens and Frames trees themselves are
+/// never scanned, so generated sheets or kept frames are never counted here.
+/// `exts` is the lowercased set of eligible extensions (from
+/// `--video-exts`); a file whose extension is *not* in `exts` is counted
+/// here.
 ///
 /// This drives the end-of-run skipped-files warning in the CLI: the operator
 /// scans the per-extension counts and, if any look like a missed video
 /// container, extends `--video-exts` to cover it. It also makes a mixed
 /// (videos + other content) directory visible at a glance.
-pub fn non_video_by_ext(root: &Path, screens_dir: &str, exts: &VideoExts) -> Skipped {
+pub fn non_video_by_ext(
+    root: &Path,
+    screens_dir: &str,
+    frames_dir: &str,
+    exts: &VideoExts,
+) -> Skipped {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut no_ext_paths: BTreeSet<PathBuf> = BTreeSet::new();
     for entry in WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| {
-            if e.file_type().is_dir() && e.file_name() == std::ffi::OsStr::new(screens_dir) {
+            if e.file_type().is_dir()
+                && (e.file_name() == std::ffi::OsStr::new(screens_dir)
+                    || e.file_name() == std::ffi::OsStr::new(frames_dir))
+            {
                 return false;
             }
             true
@@ -207,6 +225,93 @@ pub fn source_exists(root: &Path, rel_source: &Path) -> bool {
     root.join(rel_source).is_file()
 }
 
+/// Compute the mirrored output path for one kept frame of a source video:
+/// `ROOT/<frames_dir>/<rel dir>/<complete-filename>.<frame_n>.jpg`, where
+/// `<complete-filename>` is the source's full filename (extension included)
+/// and `<frame_n>` is `frame_n` zero-padded to 4 digits (1-based: `0001`,
+/// `0002`, ...). The frames are sibling `.jpg` files in the directory
+/// mirroring the source's parent — not a per-video subdirectory — so:
+///
+/// - each frame file traces back to its exact source video by name (the
+///   complete filename is the prefix before the frame number);
+/// - it never collides across formats (`movie.mp4.0001.jpg` vs
+///   `movie.mkv.0001.jpg`) nor with the sheet (`movie.mp4.jpg` has no frame
+///   number);
+/// - orphan detection ([`find_frame_orphans`]) can map a frame file back to
+///   its source by stripping the `.<frame_n>.jpg` suffix, matching the sheet
+///   orphan logic.
+///
+/// This mirrors [`sheet_path`] but yields a per-frame file rather than the
+/// single sheet file.
+pub fn frame_file_path(root: &Path, frames_dir: &str, src: &Path, frame_n: u32) -> Result<PathBuf> {
+    let rel = src
+        .strip_prefix(root)
+        .context("source video is not under --root")?;
+    let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+    let filename = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .context("source video has no file name")?;
+    Ok(root
+        .join(frames_dir)
+        .join(parent)
+        .join(format!("{filename}.{frame_n:04}.jpg")))
+}
+
+/// Remove a video's existing kept-frame files from the `<frames_dir>` tree,
+/// used to clear stale frames before regenerating (e.g. when `--force`
+/// re-runs a video whose frame count changed). Only files matching this
+/// video's frame pattern — `<complete-filename>.<4 digits>.jpg` — in the
+/// mirrored parent directory are removed, so other videos' frames in the
+/// same directory are untouched. A no-op (returns `Ok`) if the parent
+/// directory does not yet exist.
+pub fn clear_video_frames(root: &Path, frames_dir: &str, src: &Path) -> Result<()> {
+    let parent = frame_parent_dir(root, frames_dir, src)?;
+    if !parent.is_dir() {
+        return Ok(());
+    }
+    let filename = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .context("source video has no file name")?;
+    let prefix = format!("{filename}.");
+    for entry in
+        std::fs::read_dir(&parent).with_context(|| format!("reading {}", parent.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name_os = entry.file_name();
+        let Some(name) = name_os.to_str() else {
+            continue;
+        };
+        // Match `<filename>.<4 digits>.jpg` exactly so unrelated files are
+        // left alone. `<4 digits>.jpg` is 8 bytes (4 digits + ".jpg"); the
+        // first 4 must be ASCII digits, the rest ".jpg".
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.len() == 8
+            && rest.ends_with(".jpg")
+            && rest.as_bytes()[..4].iter().all(|b| b.is_ascii_digit())
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
+/// The mirrored parent directory holding a video's kept-frame files:
+/// `ROOT/<frames_dir>/<rel dir>/`.
+fn frame_parent_dir(root: &Path, frames_dir: &str, src: &Path) -> Result<PathBuf> {
+    let rel = src
+        .strip_prefix(root)
+        .context("source video is not under --root")?;
+    let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+    Ok(root.join(frames_dir).join(parent))
+}
+
 /// Scan the `<root>/<screens_dir>` tree for `*.jpg` sheets. Returns sorted
 /// list of orphan sheets (those whose source no longer exists).
 pub fn find_orphans(root: &Path, screens_dir: &str) -> Result<Vec<PathBuf>> {
@@ -281,4 +386,119 @@ fn is_empty_dir(p: &Path) -> bool {
         Ok(mut it) => it.next().is_none(),
         Err(_) => false,
     }
+}
+
+/// Relative source path for a frame file: given
+/// `ROOT/<frames_dir>/a/b/movie.mp4.0001.jpg`, returns `a/b/movie.mp4` (the
+/// `.<frame_n>.jpg` suffix stripped, leaving the source's complete filename).
+/// Stripping two extensions (`.jpg` then `.<frame_n>`) recovers the source
+/// path exactly, mirroring [`rel_source`] (which strips one).
+pub fn rel_frame_source(root: &Path, frames_dir: &str, frame: &Path) -> Result<PathBuf> {
+    let frames_root = root.join(frames_dir);
+    let rel = frame
+        .strip_prefix(&frames_root)
+        .context("frame is not under the frames tree")?;
+    Ok(rel.with_extension("").with_extension(""))
+}
+
+/// Scan the `<root>/<frames_dir>` tree for orphan frame files and remove
+/// two kinds of `.jpg`:
+///
+/// - **deleted-source frames**: a kept-frame file
+///   `<complete-filename>.<frame_n>.jpg` whose source video no longer exists
+///   (the source is recovered by stripping the `.<frame_n>.jpg` suffix);
+/// - **extra images**: any `.jpg` in the managed Frames tree that is *not* a
+///   valid frame file — i.e. its frame-number component (the last
+///   dot-component before `.jpg`) is not exactly 4 ASCII digits. Such files
+///   are not frames this run (or any run) produced, so they are treated as
+///   orphans and removed.
+///
+/// Returns a sorted list of orphan files. Mirrors [`find_orphans`] (which
+/// walks sheet `.jpg`s and maps each to its source) but with the added
+/// frame-number validation, since a frame file carries an extra `.<frame_n>`
+/// component the sheet does not.
+pub fn find_frame_orphans(root: &Path, frames_dir: &str) -> Result<Vec<PathBuf>> {
+    let frames_root = root.join(frames_dir);
+    if !frames_root.is_dir() {
+        log::debug!("no frames tree at {}", frames_root.display());
+        return Ok(Vec::new());
+    }
+    let mut orphans = Vec::new();
+    for entry in WalkDir::new(&frames_root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("jpg") {
+            continue;
+        }
+        let rel = p
+            .strip_prefix(&frames_root)
+            .context("frame is not under the frames tree")?;
+        // `<rel dir>/<complete-filename>.<frame_n>.jpg` with `.jpg` stripped:
+        // the last dot-component is the frame number.
+        let no_jpg = rel.with_extension("");
+        let frame_n = no_jpg.extension().and_then(|e| e.to_str());
+        let valid_frame_n = matches!(
+            frame_n,
+            Some(n) if n.len() == 4 && n.bytes().all(|b| b.is_ascii_digit())
+        );
+        // Invalid frame number → extra image → orphan. Otherwise orphan iff
+        // the source (frame-number component stripped) no longer exists.
+        let is_orphan = if !valid_frame_n {
+            true
+        } else {
+            let source = rel_frame_source(root, frames_dir, p)?;
+            !source_exists(root, &source)
+        };
+        if is_orphan {
+            orphans.push(p.to_path_buf());
+        }
+    }
+    orphans.sort();
+    Ok(orphans)
+}
+
+/// Remove a set of orphan frame files, then sweep the frames tree bottom-up
+/// for newly-empty directories and remove them. Returns the count removed.
+/// Mirrors [`cleanup_orphans`] but operates on the frames tree.
+pub fn cleanup_frame_orphans(orphans: &[PathBuf], root: &Path, frames_dir: &str) -> Result<usize> {
+    let frames_root = root.join(frames_dir);
+    let mut removed = 0usize;
+    for o in orphans {
+        if let Err(e) = std::fs::remove_file(o) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(anyhow::anyhow!(
+                    "failed to remove orphan frame {}: {}",
+                    o.display(),
+                    e
+                ));
+            }
+        } else {
+            log::debug!("removed orphan frame {}", o.display());
+            removed += 1;
+        }
+    }
+
+    // Bottom-up empty-directory sweep within the frames tree.
+    let mut dirs: Vec<PathBuf> = WalkDir::new(&frames_root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir())
+        .map(|e| e.into_path())
+        .collect();
+    // Deepest first so we prune leaves before their parents.
+    dirs.sort_by_key(|d| std::cmp::Reverse(d.as_os_str().len()));
+    for d in dirs {
+        if d == frames_root {
+            continue;
+        }
+        if is_empty_dir(&d) {
+            let _ = std::fs::remove_dir(&d);
+        }
+    }
+    Ok(removed)
 }

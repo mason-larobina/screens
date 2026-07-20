@@ -6,8 +6,8 @@
 //! first error and cancels in-flight workers best-effort — the first fatal
 //! failure is surfaced through that mechanism (no manual channel/flag).
 
-use crate::frames::{extract_frame, frame_count, offsets, squarify, thumb_dims};
-use crate::paths::sheet_path;
+use crate::frames::{extract_native_frame, frame_count, offsets, squarify, thumb_dims};
+use crate::paths::{clear_video_frames, frame_file_path, sheet_path};
 use crate::probe::ProbeCache;
 use crate::sheet::{self, Layout};
 use crate::text::TextRenderer;
@@ -33,16 +33,27 @@ use tempfile::TempDir;
 /// generation and the end-of-run statistics. Skipped videos are probed solely
 /// to populate the cache for stats; that is the cost of full-library
 /// coverage while keeping ffprobe to one call per video.
+///
+/// The sheet is built from native-resolution frames (one ffmpeg pass per
+/// sampled frame) resized down to thumbnail size in-process, so sheet output
+/// is identical whether or not `--frames` is set. When `keep_frames` is true,
+/// those native frames are also kept on disk as JPEGs under
+/// `root/<frames_dir>/<rel dir>/<complete-filename>.<frame_n>.jpg` (see
+/// [`crate::paths::frame_file_path`]); orphan frame files are cleaned
+/// separately by the CLI after the run. See [`process_one`] for the
+/// per-video frame handling.
 #[allow(clippy::too_many_arguments)]
 pub fn run_all(
     videos: &[PathBuf],
     root: &Path,
     screens_dir: &str,
+    frames_dir: &str,
     layout: &Layout,
     jobs: usize,
     renderer: &TextRenderer,
     cache: &ProbeCache,
     force: bool,
+    keep_frames: bool,
 ) -> Result<usize> {
     let total = videos.len();
     log::info!("processing {total} video(s) on {jobs} worker(s)");
@@ -90,7 +101,17 @@ pub fn run_all(
                     return Ok(());
                 }
 
-                process_one(src, &dest, layout, renderer, cache).map_err(|e| {
+                process_one(
+                    src,
+                    &dest,
+                    layout,
+                    renderer,
+                    cache,
+                    keep_frames,
+                    frames_dir,
+                    root,
+                )
+                .map_err(|e| {
                     log::error!("{}: {e}", src.display());
                     anyhow::anyhow!("{}: corrupt ({e})", src.display())
                 })?;
@@ -113,17 +134,33 @@ pub fn run_all(
     Ok(processed)
 }
 
-/// Process one video end-to-end: probe → compute n → extract n frames →
-/// composite → write JPEG. `dest` is the precomputed sheet output path
-/// (see [`crate::paths::sheet_path`]); the caller checks it for existence
-/// to implement the skip-existing default / `--force` override, so this
-/// function unconditionally writes the sheet. Returns `Ok(())` on success.
+/// Process one video end-to-end: probe → compute n → extract n native frames
+/// → resize each to thumbnail size → composite → write JPEG. `dest` is the
+/// precomputed sheet output path (see [`crate::paths::sheet_path`]); the
+/// caller checks it for existence to implement the skip-existing default /
+/// `--force` override, so this function unconditionally writes the sheet.
+/// Returns `Ok(())` on success.
+///
+/// Each sampled frame is extracted once via ffmpeg at native (full source)
+/// resolution (a temp PNG), then decoded and resized in-process to the
+/// megapixel-budgeted thumbnail size for the sheet — so sheet output is
+/// identical whether or not `--frames` is set. When `keep_frames` is true the
+/// decoded native frame is also re-encoded as a JPEG into the Frames tree at
+/// `root/<frames_dir>/<rel dir>/<complete-filename>.<frame_n>.jpg` (see
+/// [`crate::paths::frame_file_path`], 1-based `0001`, ...); the video's prior
+/// frame files are cleared first so stale frames from a prior run (e.g. a
+/// different frame count) are removed. Orphan frame files whose source was
+/// deleted are cleaned separately by the CLI after the run.
+#[allow(clippy::too_many_arguments)]
 fn process_one(
     src: &Path,
     dest: &Path,
     layout: &Layout,
     renderer: &TextRenderer,
     cache: &ProbeCache,
+    keep_frames: bool,
+    frames_dir: &str,
+    root: &Path,
 ) -> Result<()> {
     log::debug!("{}: probing", src.display());
     let meta = cache.get_or_probe(src)?;
@@ -164,44 +201,67 @@ fn process_one(
     );
 
     log::debug!("{}: sheet dest = {}", src.display(), dest.display());
-    // `TempDir` is removed (with contents) on drop — even on early return /
-    // panic — so cleanup is robust without manual `remove_dir_all`.
+    // `TempDir` holds the native PNG intermediates (one ffmpeg pass per
+    // sampled frame) and is removed on drop — even on early return / panic —
+    // so cleanup is robust without manual `remove_dir_all`. Kept frames are
+    // written separately into the Frames tree as JPEGs.
     let tmp = TempDir::new().map_err(|e| anyhow::anyhow!("creating temp dir: {e}"))?;
     log::debug!("{}: temp dir = {}", src.display(), tmp.path().display());
-    let mut frames: Vec<RgbImage> = Vec::with_capacity(n);
+
+    // When `--frames` is set, clear this video's prior frame files before
+    // regenerating, so stale frames from a prior run (e.g. a different frame
+    // count after the source changed) are removed — only freshly-sampled
+    // frames remain. Orphan frame files whose source was deleted are cleaned
+    // separately by the CLI's frame-orphan sweep after the run.
+    if keep_frames {
+        clear_video_frames(root, frames_dir, src)?;
+    }
 
     log::debug!("{}: extracting {n} frame(s)", src.display());
+    let mut frames: Vec<RgbImage> = Vec::with_capacity(n);
     for (i, off) in offs.iter().enumerate() {
+        // 1-based, 4-digit zero-padded frame number (0001, 0002, ...).
+        let frame_n = i as u32 + 1;
+        // One ffmpeg pass at native (full source) resolution -> a temp PNG.
         let png = tmp.path().join(format!("frame_{i:04}.png"));
-        extract_frame(src, *off, thumb_w, thumb_h, layout.jpeg_q, &png)?;
-        let img = image::open(&png)
-            .map_err(|e| anyhow::anyhow!("decoding frame {i} ({e})"))?
+        extract_native_frame(src, *off, &png)?;
+        let dyn_img = image::open(&png).map_err(|e| anyhow::anyhow!("decoding frame {i} ({e})"))?;
+        // Resize to the exact thumbnail cell for the sheet. Aspect is already
+        // preserved by `thumb_dims`, so this does not distort. Triangle is a
+        // bilinear filter — a good, fast downscaler for thumbnails. The sheet
+        // is built from this lossless PNG intermediate, so sheet output is
+        // identical whether or not `--frames` is set.
+        let thumb = dyn_img
+            .resize(thumb_w, thumb_h, image::imageops::FilterType::Triangle)
             .to_rgb8();
         log::trace!(
-            "{}: frame {i} @ {:.3}s -> {}x{}",
+            "{}: frame {frame_n} @ {:.3}s -> native, thumb {}x{}",
             src.display(),
             off,
-            img.width(),
-            img.height()
+            thumb.width(),
+            thumb.height()
         );
-        frames.push(img);
-        // Remove mid-loop so we don't accumulate all n PNGs on disk at once.
+        frames.push(thumb);
+        // Keep the native frame as a JPEG in the Frames tree. This re-encodes
+        // the already-decoded native image in-process (no extra ffmpeg pass):
+        // `--frames` adds one image encode per frame, not a second ffmpeg
+        // invocation.
+        if keep_frames {
+            let jpg = frame_file_path(root, frames_dir, src, frame_n)?;
+            let native = dyn_img.to_rgb8();
+            sheet::write_jpeg(&native, &jpg, layout.jpeg_q)?;
+            log::trace!(
+                "{}: kept native frame {frame_n} -> {}",
+                src.display(),
+                jpg.display()
+            );
+        }
+        // Drop the temp PNG mid-loop so we don't accumulate full-res PNGs.
         let _ = std::fs::remove_file(&png);
     }
 
-    // All thumbnails share the same source aspect, so they all decode to the
-    // requested thumb dimensions. Sanity-check the first frame and fall back
-    // to the computed dims if ffmpeg ever disagrees.
-    if let Some(first) = frames.first()
-        && (first.width() != thumb_w || first.height() != thumb_h)
-    {
-        log::warn!(
-            "{}: ffmpeg produced {}x{} (expected {thumb_w}x{thumb_h}); using actual",
-            src.display(),
-            first.width(),
-            first.height()
-        );
-    }
+    // `image::resize` produces exactly `thumb_w`×`thumb_h`, so every frame
+    // fills its grid cell exactly — no size fallback needed.
 
     log::debug!(
         "{}: thumb = {thumb_w}x{thumb_h}, frames = {}",

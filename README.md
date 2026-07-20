@@ -8,6 +8,12 @@ For every video:
 ROOT/a/b/video.mkv   ->   ROOT/Screens/a/b/video.mkv.jpg
 ```
 
+With `--frames`, the native-resolution frames sampled for each sheet are also saved (mirrored under a neighbouring `Frames/` tree):
+
+```
+ROOT/a/b/video.mkv   ->   ROOT/Frames/a/b/video.mkv.0001.jpg ...
+```
+
 ## What it does
 
 - **One JPEG per input video**, sampled across the duration (skipping the start/end, which are typically black frames).
@@ -16,6 +22,7 @@ ROOT/a/b/video.mkv   ->   ROOT/Screens/a/b/video.mkv.jpg
 - **4-line header** on every sheet: filename, size + duration, video codec/resolution/bitrate/fps, and audio codec/channels/sample rate. The audio line is always rendered (`Audio: —` when there is no audio stream).
 - **Mirrors the input tree** under `<ROOT>/<screens-dir>/`, preserving the full source filename (extension included) plus `.jpg` so sheets trace back to their exact source and never collide across formats.
 - **Orphan cleanup** removes sheets whose source video no longer exists, scoped strictly to the screens tree (source files are never touched).
+- **Optional frame keeping** (`--frames`): save every sampled frame at full (native) source resolution as JPEG files (`<filename>.<NNNN>.jpg`, 1-based) into a neighbouring `Frames/` tree, mirroring the source layout. This adds no extra `ffmpeg` work — the sheet is built from these same native frames (extracted once, then resized to thumbnail size in-process) — so `--frames` just re-encodes the already-decoded native image as a JPEG on disk. Like the screens tree, orphan frame files (whose source was deleted) and stale frames from prior runs are removed automatically.
 - **Skips already-generated sheets** by default — re-runs only sheet new or umped sources; pass `--force` to regenerate everything. See [Skip existing sheets](#skip-existing-sheets).
 - **Fail-fast on corrupt input**: a single irrecoverable error aborts the run so you notice and can fix/re-run.
 - **End-of-run statistics**: prints a plain-text report on stdout, grouping and counting every video under root by extension, resolution, video codec, audio codec, duration, and bitrate.
@@ -67,6 +74,8 @@ Options:
       --jobs <JOBS>                Worker parallelism (default = number of CPUs)
       --no-orphan-cleanup          Disable automatic orphan removal; orphans are still reported on stderr
       --force                      Regenerate sheets that already exist. By default a video whose sheet already exists on disk is skipped (and counted), so re-runs only do work for new or changed sources. Pass `--force` to overwrite existing sheets unconditionally
+      --frames                     Save every sampled frame at native (full source) resolution into a `<ROOT>/<frames-dir>/` sibling tree, as JPEG files named `<complete-filename>.<frame_n>.jpg` (1-based, zero-padded to 4 digits: `0001`, `0002`, ...) sitting beside the source's relative path. Off by default. The sheet is built from these same native frames — extracted once via ffmpeg, then resized to thumbnail size in-process — so `--frames` adds no extra ffmpeg work: it just re-encodes the already-decoded native image as a JPEG on disk instead of discarding it. Sheet output is identical whether or not this flag is set. Like the screens tree, orphan frame files whose source video no longer exists (and any extra non-frame `.jpg` images in the tree) are removed (subject to `--no-orphan-cleanup`), and a video's prior frame files are cleared before regeneration so stale frames from a prior run (e.g. a different frame count) are removed
+      --frames-dir <FRAMES_DIR>    Name of the neighbouring frame-output subtree, created directly under ROOT when `--frames` is set. Must be a single path component and must differ from `--screens-dir` [default: Frames]
       --video-exts <VIDEO_EXTS>    Video extensions (case-insensitive, no leading dot) eligible for sheet generation. Comma-separated. Files whose extension is **not** in this set are skipped and reported (grouped by extension) so a missed video type can be spotted and added here [default: mp4,m4v,mkv,mov,avi,wmv,flv,f4v,webm,mpg,mpeg,ts,m2ts,vob,3gp,ogv]
   -h, --help                       Print help
   -V, --version                    Print version
@@ -138,6 +147,24 @@ By bitrate:
 ### Orphan cleanup
 
 On by default, scoped to the screens tree only. After generation, any sheet whose source video no longer exists is reported and deleted (along with any now-empty subdirectories it leaves behind). Pass `--no-orphan-cleanup` to report without deleting. Source files are never touched.
+
+### Keep frames
+
+Pass `--frames` to also save the full-resolution frames sampled for each sheet into a neighbouring `Frames/` tree, mirroring the source layout. Each frame is a JPEG file named `<complete-filename>.<frame_n>.jpg` (1-based, zero-padded to 4 digits) sitting beside the source's relative path:
+
+```
+ROOT/a/b/video.mkv   ->   ROOT/Frames/a/b/video.mkv.0001.jpg ... video.mkv.000N.jpg
+```
+
+The sheet is built from these **same** native frames: each sampled frame is extracted once via `ffmpeg` at full source resolution, then decoded and resized down to the megapixel-budgeted thumbnail size in-process (with the `image` crate) for the sheet. So sheet output is identical whether or not `--frames` is set, and `--frames` adds **no extra `ffmpeg` work** — it just re-encodes the already-decoded native image as a JPEG on disk instead of discarding it.
+
+The `Frames/` tree is managed like the `Screens/` tree:
+
+- a video's prior frame files are **cleared before regeneration** (e.g. with `--force`), so stale frames from a prior run — such as a higher frame count after the source changed — are removed;
+- orphan frame files whose source video no longer exists are reported and removed (along with any now-empty subdirectories), subject to `--no-orphan-cleanup`; any extra non-frame `.jpg` images in the tree are also removed;
+- the orphan sweep runs regardless of `--frames`, so stale frame files left by a prior `--frames` run are cleaned even on a run that does not keep frames this time (existing-source frame files are preserved).
+
+Rename the tree with `--frames-dir <NAME>` (default `Frames`); it must be a single path component and must differ from `--screens-dir`.
 
 ### Logging
 
