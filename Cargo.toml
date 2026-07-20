@@ -1,6 +1,6 @@
 [package]
 name = "screens"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 repository = "https://github.com/mason-larobina/screens"
 readme = "README.md"
@@ -27,7 +27,7 @@ tempfile    = "3"
 which       = "8"
 humansize   = "2"
 textwrap    = "0.16"
-imageproc   = "0.25"
+imageproc   = "0.27"
 
 [profile.release]
 opt-level = 3
