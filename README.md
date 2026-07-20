@@ -23,7 +23,7 @@ ROOT/a/b/video.mkv   ->   ROOT/Frames/a/b/video.mkv.0001.jpg ...
 - **Mirrors the input tree** under `<ROOT>/<screens-dir>/`, preserving the full source filename (extension included) plus `.jpg` so sheets trace back to their exact source and never collide across formats.
 - **Orphan cleanup** removes sheets whose source video no longer exists, scoped strictly to the screens tree (source files are never touched).
 - **Optional frame keeping** (`--frames`): save every sampled frame at full (native) source resolution as JPEG files (`<filename>.<NNNN>.jpg`, 1-based) into a neighbouring `Frames/` tree, mirroring the source layout. This adds no extra `ffmpeg` work — the sheet is built from these same native frames (extracted once, then resized to thumbnail size in-process) — so `--frames` just re-encodes the already-decoded native image as a JPEG on disk. Like the screens tree, orphan frame files (whose source was deleted) and stale frames from prior runs are removed automatically.
-- **Skips already-generated sheets** by default — re-runs only sheet new or umped sources; pass `--force` to regenerate everything. See [Skip existing sheets](#skip-existing-sheets).
+- **Skips already-generated sheets** by default — re-runs only do work for new or changed sources; pass `--force` to regenerate everything. See [Skip existing sheets](#skip-existing-sheets).
 - **Fail-fast on corrupt input**: a single irrecoverable error aborts the run so you notice and can fix/re-run.
 - **End-of-run statistics**: prints a plain-text report on stdout, grouping and counting every video under root by extension, resolution, video codec, audio codec, duration, and bitrate.
 

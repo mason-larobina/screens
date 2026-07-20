@@ -430,10 +430,9 @@ fn warn_skipped_files(
 /// Emit end-of-run library statistics: every video under `root` grouped
 /// and counted by extension, resolution, video codec, and audio codec,
 /// rendered as a plain-text block on stdout. Reuses the per-video probe
-/// results cached
-/// during the run via `cache`, so no ffprobe calls are added. `video_count`
-/// is the number of eligible videos collected, used only to short-circuit
-/// the (cheap) report when there are none.
+/// results cached during the run via `cache`, so no ffprobe calls are
+/// added. `video_count` is the number of eligible videos collected, used
+/// only to short-circuit the (cheap) report when there are none.
 fn print_stats(
     root: &std::path::Path,
     screens_dir: &str,
